@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>進化多角形ゲーム・合体バグ修正版</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0; padding: 0;
+            background-color: #2c3e50;
+            display: flex; justify-content: center; align-items: center;
+            height: 100dvh; width: 100vw;
+            font-family: sans-serif; color: white;
+            overflow: hidden; touch-action: none;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            background-color: #f1f2f6;
+            width: min(90vw, calc(85dvh * 360 / 600));
+            height: min(85dvh, calc(90vw * 600 / 360));
+        }
+        canvas { display: block; width: 100%; height: 100%; }
+        #score-board {
+            position: absolute; top: 10px; left: 10px;
+            font-size: 14px; font-weight: bold;
+            background: rgba(0,0,0,0.6); padding: 5px 12px; border-radius: 5px;
+            pointer-events: none; z-index: 10;
+            line-height: 1.6;
+        }
+        .reset-btn {
+            display: inline-block;
+            margin-left: 6px;
+            cursor: pointer;
+            background: #e74c3c;
+            color: white;
+            border: none;
+            padding: 1px 6px;
+            font-size: 11px;
+            border-radius: 3px;
+            pointer-events: auto; 
+            vertical-align: middle;
+        }
+        .reset-btn:hover { background: #c0392b; }
+        
+        #next-box {
+            position: absolute; top: 10px; right: 10px;
+            font-size: 12px; font-weight: bold;
+            text-align: center;
+            background: rgba(0,0,0,0.6); padding: 5px 8px; border-radius: 5px;
+            pointer-events: none; z-index: 10;
+            min-width: 60px;
+        }
+        #game-over-screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            z-index: 20; opacity: 0; pointer-events: none;
+            transition: opacity 0.4s ease;
+        }
+        #game-over-screen.show { opacity: 1; pointer-events: auto; }
+        #go-title { font-size: 32px; font-weight: bold; color: #e74c3c; margin-bottom: 20px; text-shadow: 0 2px 4px rgba(0,0,0,0.5); }
+        #go-score { font-size: 20px; margin-bottom: 30px; }
+        #retry-btn {
+            background: #2ecc71; color: white; border: none; padding: 12px 30px;
+            font-size: 18px; font-weight: bold; border-radius: 25px; cursor: pointer;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3); transition: transform 0.1s;
+        }
+        #retry-btn:active { transform: scale(0.95); }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <div id="score-board">
+            SCORE: <span id="score">0</span><br>
+            BEST: <span id="best-score">0</span>
+            <button class="reset-btn" onclick="resetBestScore()">🗑️ リセット</button>
+        </div>
+        <div id="next-box">
+            NEXT
+            <canvas id="nextPreviewCanvas" width="50" height="50"></canvas>
+        </div>
+        <canvas id="gameCanvas" width="360" height="600"></canvas>
+
+        <div id="game-over-screen">
+            <div id="go-title">GAME OVER</div>
+            <div id="go-score">FINAL SCORE: <span id="final-score">0</span></div>
+            <button id="retry-btn" onclick="resetGame()">RETRY</button>
+        </div>
+    </div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const nextCanvas = document.getElementById('nextPreviewCanvas');
+const nextCtx = nextCanvas.getContext('2d');
+const WIDTH = 360;
+const HEIGHT = 600;
+
+const DEADLINE_Y = 110;
+
+function getStageConfig(sides) {
+    let level = 0;
+    if (sides % 3 === 0) {
+        level = Math.log2(sides / 3);         
+    } else if (sides % 4 === 0) {
+        level = Math.log2(sides / 4) + 0.5;   
+    }
+    const radius = 20 + level * 13; 
+    
+    const r = Math.floor(Math.sin(level * 0.7 + 0.0) * 127 + 128);
+    const g = Math.floor(Math.sin(level * 0.7 + 2.0) * 127 + 128);
+    const b = Math.floor(Math.sin(level * 0.7 + 4.0) * 127 + 128);
+    const color = `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
+    
+    return { radius, color };
+}
+
+let score = 0;
+let bestScore = parseInt(localStorage.getItem('polygon_best_score')) || 0;
+document.getElementById('best-score').innerText = bestScore;
+
+let objects = [];
+let currentObj = null;
+let queuedSides = null; 
+let canDrop = true;
+let gameOver = false;
+let gameOverTimer = 0;
+
+function resetBestScore() {
+    if (confirm("BESTスコアを0にリセットしますか？")) {
+        bestScore = 0;
+        document.getElementById('best-score').innerText = 0;
+        localStorage.removeItem('polygon_best_score');
+    }
+}
+
+function updateScore(pts) {
+    score += pts;
+    document.getElementById('score').innerText = score;
+    if (score > bestScore) {
+        bestScore = score;
+        document.getElementById('best-score').innerText = bestScore;
+        localStorage.setItem('polygon_best_score', bestScore);
+    }
+}
+
+function drawPolygonOn(context, x, y, radius, sides, color, angle, drawText = true) {
+    context.fillStyle = color;
+    context.beginPath();
+    for (let i = 0; i < sides; i++) {
+        const a = angle + (i * 2 * Math.PI / sides);
+        const px = x + radius * Math.cos(a);
+        const py = y + radius * Math.sin(a);
+        if (i === 0) context.moveTo(px, py);
+        else context.lineTo(px, py);
+    }
+    context.closePath();
+    context.fill();
+    context.strokeStyle = 'rgba(0,0,0,0.2)';
+    context.lineWidth = 2;
+    context.stroke();
+
+    if (drawText) {
+        context.save();
+        context.fillStyle = 'rgba(255, 255, 255, 0.9)'; 
+        context.strokeStyle = 'rgba(0, 0, 0, 0.6)';      
+        context.lineWidth = 3;
+        const fontSize = Math.max(11, radius * 0.4);
+        context.font = `bold ${fontSize}px sans-serif`;
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.strokeText(sides, x, y);
+        context.fillText(sides, x, y);
+        context.restore();
+    }
+}
+
+function drawNextPreview() {
+    nextCtx.clearRect(0, 0, 50, 50);
+    if (queuedSides) {
+        const config = getStageConfig(queuedSides);
+        const previewRadius = Math.min(18, config.radius * 0.7);
+        drawPolygonOn(nextCtx, 25, 25, previewRadius, queuedSides, config.color, 0, true);
+    }
+}
+
+function getRandomSides() {
+    const rand = Math.random() * 100;
+    if (rand < 55) return 3;       
+    if (rand < 90) return 4;       
+    if (rand < 97) return 6;       
+    return 8;                      
+}
+
+function spawnNext() {
+    if (gameOver) return;
+    if (queuedSides === null) {
+        queuedSides = getRandomSides();
+    }
+    let currentSides = queuedSides;
+    queuedSides = getRandomSides();
+    drawNextPreview();
+    
+    const config = getStageConfig(currentSides);
+    currentObj = {
+        x: WIDTH / 2, y: 50, vx: 0, vy: 0,
+        radius: config.radius, sides: currentSides, color: config.color,
+        angle: 0, vangle: 0
+    };
+}
+
+function drop() {
+    if (!currentObj || !canDrop || gameOver) return;
+    canDrop = false;
+    objects.push(currentObj);
+    currentObj = null;
+    setTimeout(() => { spawnNext(); canDrop = true; }, 400);
+}
+
+function move(clientX) {
+    if (!currentObj || gameOver) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = WIDTH / rect.width;
+    let x = (clientX - rect.left) * scaleX;
+    
+    const minX = currentObj.radius + 12;
+    const maxX = WIDTH - currentObj.radius - 12;
+    if (x < minX) x = minX;
+    if (x > maxX) x = maxX;
+    currentObj.x = x;
+}
+
+window.addEventListener('pointermove', (e) => {
+    move(e.clientX);
+});
+
+window.addEventListener('pointerup', (e) => {
+    if (e.target.closest('.reset-btn') || e.target.closest('#game-over-screen')) return;
+    drop();
+});
+
+const GRAVITY = 0.075;
+const BOUNCE = 0.12;
+const FRICTION = 0.995;
+
+function updatePhysics() {
+    if (gameOver) return;
+
+    for (let obj of objects) {
+        obj.vy += GRAVITY;
+        obj.x += obj.vx;
+        obj.y += obj.vy;
+        obj.angle += obj.vangle;
+        obj.vx *= FRICTION;
+        obj.vangle *= FRICTION;
+
+        if (obj.y + obj.radius > HEIGHT - 12) {
+            obj.y = HEIGHT - 12 - obj.radius;
+            obj.vy = -obj.vy * BOUNCE;
+            obj.vx += (Math.random() - 0.5) * 0.05;
+            obj.vangle = obj.vx * 0.05;
+        }
+        if (obj.x - obj.radius < 12) { obj.x = 12 + obj.radius; obj.vx = -obj.vx * BOUNCE; }
+        if (obj.x + obj.radius > WIDTH - 12) { obj.x = WIDTH - 12 - obj.radius; obj.vx = -obj.vx * BOUNCE; }
+    }
+
+    let toRemove = new Set();
+    let toAdd = [];
+
+    for (let i = 0; i < objects.length; i++) {
+        for (let j = i + 1; j < objects.length; j++) {
+            let o1 = objects[i]; let o2 = objects[j];
+            if (toRemove.has(o1) || toRemove.has(o2)) continue;
+
+            let dx = o2.x - o1.x; let dy = o2.y - o1.y;
+            let dist = Math.sqrt(dx * dx + dy * dy);
+            let minDist = o1.radius + o2.radius;
+
+            if (dist < minDist) {
+                // 【バグ修正】同じ数字がぶつかった時の進化処理を完全に安全な形に修正
+                if (o1.sides === o2.sides) {
+                    let nextSides = o1.sides * 2;
+                    toRemove.add(o1); toRemove.add(o2);
+
+                    let config = getStageConfig(nextSides);
+                    toAdd.push({
+                        x: (o1.x + o2.x) / 2, 
+                        y: (o1.y + o2.y) / 2,
+                        vx: (o1.vx + o2.vx) / 2, 
+                        vy: (o1.vy + o2.vy) / 2,
+                        radius: config.radius, 
+                        sides: nextSides, 
+                        color: config.color,
+                        angle: (o1.angle + o2.angle) / 2, 
+                        vangle: 0
+                    });
+                    updateScore(nextSides * 10);
+                    break;
+                }
+
+                let overlap = minDist - dist;
+                let nx = dx / dist; let ny = dy / dist;
+                o1.x -= nx * overlap * 0.5; o1.y -= ny * overlap * 0.5;
+                o2.x += nx * overlap * 0.5; o2.y += ny * overlap * 0.5;
+
+                let kx = o1.vx - o2.vx; let ky = o1.vy - o2.vy;
+                let p = (nx * kx + ny * ky);
+                o1.vx -= nx * p * 0.5; o1.vy -= ny * p * 0.5;
+                o2.vx += nx * p * 0.5; o2.vy += ny * p * 0.5;
+                o1.vangle += o1.vx * 0.002; o2.vangle += o2.vx * 0.002;
+            }
+        }
+    }
+
+    if (toRemove.size > 0) objects = objects.filter(o => !toRemove.has(o));
+    for (let a of toAdd) objects.push(a);
+
+    let isOverflowing = false;
+    for (let obj of objects) {
+        if (obj.y - obj.radius < DEADLINE_Y) {
+            isOverflowing = true;
+            break;
+        }
+    }
+
+    if (isOverflowing) {
+        gameOverTimer++;
+        if (gameOverTimer > 180) { 
+            gameOver = true;
+            document.getElementById('final-score').innerText = score;
+            document.getElementById('game-over-screen').classList.add('show');
+            return;
+        }
+    } else {
+        gameOverTimer = 0; 
+    }
+}
+
+function resetGame() { 
+    objects = []; 
+    score = 0; 
+    document.getElementById('score').innerText = 0;
+    gameOver = false; 
+    gameOverTimer = 0; 
+    queuedSides = null; 
+    document.getElementById('game-over-screen').classList.remove('show');
+    spawnNext(); 
+}
+
+function gameLoop() {
+    ctx.clearRect(0, 0, WIDTH, HEIGHT);
+    
+    ctx.fillStyle = '#bdc3c7';
+    ctx.fillRect(0, HEIGHT - 12, WIDTH, 12); 
+    ctx.fillRect(0, 0, 12, HEIGHT); 
+    ctx.fillRect(WIDTH - 12, 0, 12, HEIGHT); 
+
+    for (let step = 0; step < 4; step++) {
+        updatePhysics();
+    }
+
+    ctx.strokeStyle = gameOverTimer > 0 ? 'rgba(231, 76, 60, 0.4)' : 'rgba(0, 0, 0, 0.05)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(12, DEADLINE_Y);
+    ctx.lineTo(WIDTH - 12, DEADLINE_Y);
+    ctx.stroke();
+
+    for (let obj of objects) {
+        drawPolygonOn(ctx, obj.x, obj.y, obj.radius, obj.sides, obj.color, obj.angle);
+    }
+    if (currentObj) {
+        drawPolygonOn(ctx, currentObj.x, currentObj.y, currentObj.radius, currentObj.sides, currentObj.color, currentObj.angle);
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.08)'; ctx.beginPath();
+        ctx.moveTo(currentObj.x, currentObj.y); ctx.lineTo(currentObj.x, HEIGHT - 12); ctx.stroke();
+    }
+    requestAnimationFrame(gameLoop);
+}
+
+spawnNext();
+gameLoop();
+</script>
+</body>
+</html>
