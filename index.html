@@ -87,11 +87,6 @@
             box-shadow: 0 4px 10px rgba(0,0,0,0.3); transition: transform 0.1s;
         }
         #retry-btn:active { transform: scale(0.95); }
-        
-        #back-to-menu-btn {
-            background: transparent; color: #bdc3c7; border: 1px solid #bdc3c7; padding: 6px 16px;
-            font-size: 12px; border-radius: 15px; cursor: pointer; margin-top: 15px;
-        }
     </style>
 </head>
 <body>
@@ -125,8 +120,8 @@
         <div id="game-over-screen" class="overlay-screen">
             <div id="go-title" class="screen-title">GAME OVER</div>
             <div id="go-score">FINAL SCORE: <span id="final-score">0</span></div>
-            <button id="retry-btn" onclick="resetGame()">RETRY</button>
-            <button id="back-to-menu-btn" onclick="showMenu()">タイトルに戻る</button>
+            <!-- ボタンを押したらタイトルメニューに戻るように変更 -->
+            <button id="retry-btn" onclick="showMenu()">タイトルに戻る</button>
         </div>
     </div>
 
@@ -257,13 +252,12 @@ function getRandomSides() {
     }
 }
 
-// モードを選択してゲームを開始する関数（バグ修正版）
+// モードを選択してゲームを開始する関数
 function selectMode(mode) {
     currentMode = mode;
     updateBestScoreDisplay();
     document.getElementById('menu-screen').classList.remove('show');
     
-    // 先にフラグを立てて有効化してからリセットを呼ぶ
     isGameActive = true;
     canDrop = true;
     
@@ -279,6 +273,7 @@ function showMenu() {
     objects = [];
     document.getElementById('game-over-screen').classList.remove('show');
     document.getElementById('menu-screen').classList.add('show');
+    nextCtx.clearRect(0, 0, 50, 50); // NEXT予告をクリア
 }
 
 function spawnNext() {
@@ -465,7 +460,6 @@ function gameLoop() {
     requestAnimationFrame(gameLoop);
 }
 
-// 起動時はメニュー画面を表示するため、初期配置の自動生成は行わない
 nextCtx.clearRect(0, 0, 50, 50);
 gameLoop();
 </script>
