@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>進化多角形ゲーム・合体バグ修正版</title>
+    <title>進化多角形ゲーム・モード選択版</title>
     <style>
         * { box-sizing: border-box; }
         body {
@@ -52,42 +52,81 @@
             pointer-events: none; z-index: 10;
             min-width: 60px;
         }
-        #game-over-screen {
+        
+        /* メニューおよびゲームオーバー共通の画面スタイル */
+        .overlay-screen {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0, 0, 0, 0.8);
+            background: rgba(0, 0, 0, 0.85);
             display: flex; flex-direction: column; justify-content: center; align-items: center;
             z-index: 20; opacity: 0; pointer-events: none;
             transition: opacity 0.4s ease;
+            padding: 20px;
+            text-align: center;
         }
-        #game-over-screen.show { opacity: 1; pointer-events: auto; }
-        #go-title { font-size: 32px; font-weight: bold; color: #e74c3c; margin-bottom: 20px; text-shadow: 0 2px 4px rgba(0,0,0,0.5); }
+        .overlay-screen.show { opacity: 1; pointer-events: auto; }
+        
+        .screen-title { font-size: 28px; font-weight: bold; color: #f1c40f; margin-bottom: 24px; text-shadow: 0 2px 4px rgba(0,0,0,0.5); }
+        #go-title { color: #e74c3c; font-size: 32px; }
         #go-score { font-size: 20px; margin-bottom: 30px; }
+        
+        /* ボタンのスタイル */
+        .menu-btn {
+            background: #34495e; color: white; border: 2px solid #34495e; padding: 12px 20px;
+            font-size: 16px; font-weight: bold; border-radius: 12px; cursor: pointer;
+            width: 80%; max-width: 260px; margin-bottom: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.2); transition: all 0.1s;
+        }
+        .menu-btn:active { transform: scale(0.95); }
+        .menu-btn.type-3 { background: #2980b9; border-color: #2980b9; }
+        .menu-btn.type-4 { background: #27ae60; border-color: #27ae60; }
+        .menu-btn.type-all { background: #8e44ad; border-color: #8e44ad; }
+        
         #retry-btn {
             background: #2ecc71; color: white; border: none; padding: 12px 30px;
             font-size: 18px; font-weight: bold; border-radius: 25px; cursor: pointer;
             box-shadow: 0 4px 10px rgba(0,0,0,0.3); transition: transform 0.1s;
         }
         #retry-btn:active { transform: scale(0.95); }
+        
+        #back-to-menu-btn {
+            background: transparent; color: #bdc3c7; border: 1px solid #bdc3c7; padding: 6px 16px;
+            font-size: 12px; border-radius: 15px; cursor: pointer; margin-top: 15px;
+        }
     </style>
 </head>
 <body>
 
     <div id="game-container">
+        <!-- スコアボード -->
         <div id="score-board">
             SCORE: <span id="score">0</span><br>
             BEST: <span id="best-score">0</span>
             <button class="reset-btn" onclick="resetBestScore()">🗑️ リセット</button>
         </div>
+        
+        <!-- 次のブロック予告 -->
         <div id="next-box">
             NEXT
             <canvas id="nextPreviewCanvas" width="50" height="50"></canvas>
         </div>
+        
+        <!-- メインキャンバス -->
         <canvas id="gameCanvas" width="360" height="600"></canvas>
 
-        <div id="game-over-screen">
-            <div id="go-title">GAME OVER</div>
+        <!-- モード選択メニュー画面 -->
+        <div id="menu-screen" class="overlay-screen show">
+            <div class="screen-title">進化多角形ゲーム</div>
+            <button class="menu-btn type-3" onclick="selectMode('3')">3系統モード<br><small>(3, 6, 12...)</small></button>
+            <button class="menu-btn type-4" onclick="selectMode('4')">4系統モード<br><small>(4, 8, 16...)</small></button>
+            <button class="menu-btn type-all" onclick="selectMode('all')">両方ミックスモード</button>
+        </div>
+
+        <!-- ゲームオーバー画面 -->
+        <div id="game-over-screen" class="overlay-screen">
+            <div id="go-title" class="screen-title">GAME OVER</div>
             <div id="go-score">FINAL SCORE: <span id="final-score">0</span></div>
             <button id="retry-btn" onclick="resetGame()">RETRY</button>
+            <button id="back-to-menu-btn" onclick="showMenu()">タイトルに戻る</button>
         </div>
     </div>
 
@@ -100,6 +139,9 @@ const WIDTH = 360;
 const HEIGHT = 600;
 
 const DEADLINE_Y = 110;
+
+// 現在のゲームモード ('3' | '4' | 'all')
+let currentMode = 'all';
 
 function getStageConfig(sides) {
     let level = 0;
@@ -119,31 +161,38 @@ function getStageConfig(sides) {
 }
 
 let score = 0;
-let bestScore = parseInt(localStorage.getItem('polygon_best_score')) || 0;
-document.getElementById('best-score').innerText = bestScore;
+// ベストスコアはモードごとに分けて保存
+let bestScores = JSON.parse(localStorage.getItem('polygon_best_scores')) || { '3': 0, '4': 0, 'all': 0 };
+updateBestScoreDisplay();
 
 let objects = [];
 let currentObj = null;
 let queuedSides = null; 
-let canDrop = true;
+let canDrop = false; // 初期状態（メニュー画面）では落とせないようにする
 let gameOver = false;
 let gameOverTimer = 0;
+let isGameActive = false; // ゲームが開始されているかのフラグ
+
+function updateBestScoreDisplay() {
+    document.getElementById('best-score').innerText = bestScores[currentMode] || 0;
+}
 
 function resetBestScore() {
-    if (confirm("BESTスコアを0にリセットしますか？")) {
-        bestScore = 0;
-        document.getElementById('best-score').innerText = 0;
-        localStorage.removeItem('polygon_best_score');
+    let modeName = currentMode === '3' ? '3系統' : currentMode === '4' ? '4系統' : 'ミックス';
+    if (confirm(`現在の「${modeName}」のBESTスコアを0にリセットしますか？`)) {
+        bestScores[currentMode] = 0;
+        updateBestScoreDisplay();
+        localStorage.setItem('polygon_best_scores', JSON.stringify(bestScores));
     }
 }
 
 function updateScore(pts) {
     score += pts;
     document.getElementById('score').innerText = score;
-    if (score > bestScore) {
-        bestScore = score;
-        document.getElementById('best-score').innerText = bestScore;
-        localStorage.setItem('polygon_best_score', bestScore);
+    if (score > bestScores[currentMode]) {
+        bestScores[currentMode] = score;
+        updateBestScoreDisplay();
+        localStorage.setItem('polygon_best_scores', JSON.stringify(bestScores));
     }
 }
 
@@ -187,16 +236,53 @@ function drawNextPreview() {
     }
 }
 
+// 選択されたモードに応じて出現する角数を制限
 function getRandomSides() {
     const rand = Math.random() * 100;
-    if (rand < 55) return 3;       
-    if (rand < 90) return 4;       
-    if (rand < 97) return 6;       
-    return 8;                      
+    
+    if (currentMode === '3') {
+        if (rand < 60) return 3;
+        if (rand < 90) return 6;
+        return 12;
+    } else if (currentMode === '4') {
+        if (rand < 60) return 4;
+        if (rand < 90) return 8;
+        return 16;
+    } else {
+        // ミックスモード（元の挙動）
+        if (rand < 55) return 3;       
+        if (rand < 90) return 4;       
+        if (rand < 97) return 6;       
+        return 8;                      
+    }
+}
+
+// モードを選択してゲームを開始する関数（バグ修正版）
+function selectMode(mode) {
+    currentMode = mode;
+    updateBestScoreDisplay();
+    document.getElementById('menu-screen').classList.remove('show');
+    
+    // 先にフラグを立てて有効化してからリセットを呼ぶ
+    isGameActive = true;
+    canDrop = true;
+    
+    resetGame();
+}
+
+// タイトルメニュー画面に戻る関数
+function showMenu() {
+    isGameActive = false;
+    canDrop = false;
+    currentObj = null;
+    queuedSides = null;
+    objects = [];
+    document.getElementById('game-over-screen').classList.remove('show');
+    document.getElementById('menu-screen').classList.add('show');
 }
 
 function spawnNext() {
-    if (gameOver) return;
+    if (gameOver || !isGameActive) return;
     if (queuedSides === null) {
         queuedSides = getRandomSides();
     }
@@ -213,15 +299,15 @@ function spawnNext() {
 }
 
 function drop() {
-    if (!currentObj || !canDrop || gameOver) return;
+    if (!currentObj || !canDrop || gameOver || !isGameActive) return;
     canDrop = false;
     objects.push(currentObj);
     currentObj = null;
-    setTimeout(() => { spawnNext(); canDrop = true; }, 400);
+    setTimeout(() => { if(isGameActive) { spawnNext(); canDrop = true; } }, 400);
 }
 
 function move(clientX) {
-    if (!currentObj || gameOver) return;
+    if (!currentObj || gameOver || !isGameActive) return;
     const rect = canvas.getBoundingClientRect();
     const scaleX = WIDTH / rect.width;
     let x = (clientX - rect.left) * scaleX;
@@ -238,7 +324,7 @@ window.addEventListener('pointermove', (e) => {
 });
 
 window.addEventListener('pointerup', (e) => {
-    if (e.target.closest('.reset-btn') || e.target.closest('#game-over-screen')) return;
+    if (e.target.closest('.reset-btn') || e.target.closest('.overlay-screen')) return;
     drop();
 });
 
@@ -247,7 +333,7 @@ const BOUNCE = 0.12;
 const FRICTION = 0.995;
 
 function updatePhysics() {
-    if (gameOver) return;
+    if (gameOver || !isGameActive) return;
 
     for (let obj of objects) {
         obj.vy += GRAVITY;
@@ -280,7 +366,6 @@ function updatePhysics() {
             let minDist = o1.radius + o2.radius;
 
             if (dist < minDist) {
-                // 【バグ修正】同じ数字がぶつかった時の進化処理を完全に安全な形に修正
                 if (o1.sides === o2.sides) {
                     let nextSides = o1.sides * 2;
                     toRemove.add(o1); toRemove.add(o2);
@@ -380,7 +465,8 @@ function gameLoop() {
     requestAnimationFrame(gameLoop);
 }
 
-spawnNext();
+// 起動時はメニュー画面を表示するため、初期配置の自動生成は行わない
+nextCtx.clearRect(0, 0, 50, 50);
 gameLoop();
 </script>
 </body>
